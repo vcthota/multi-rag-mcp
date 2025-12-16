@@ -1,0 +1,26 @@
+# Minimal requirements for quick start
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+python-multipart==0.0.6
+
+# AI/ML
+openai==1.10.0
+langchain==0.1.5
+langchain-openai==0.0.5
+tiktoken==0.5.2
+
+# Vector DBs
+chromadb==0.4.22
+
+# PDF Processing
+pypdf2==3.0.1
+pyyaml==6.0.1
+
+# Logging
+python-json-logger==2.0.7
+
+# HTTP
+httpx==0.26.0
