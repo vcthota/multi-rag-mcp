@@ -21,17 +21,19 @@ class GovernanceValidator:
     
     def __init__(self):
         self.embedding_model = get_embedding_model()
-        self.vector_store = get_vector_store(settings.PINECONE_INDEX_GOVERNANCE)
+        self.vector_store = get_vector_store(settings.PINECONE_INDEX_API_GOVERNANCE)
         self.llm_client = get_llm_client()
     
     async def validate_spec(
         self,
         spec_content: str,
-        spec_format: str = "json"
+        spec_format: str = "json",
+        request_id: str = None
     ) -> Dict[str, Any]:
         """Validate API specification against governance rules"""
         
-        logger.info("Starting API specification validation")
+        log_extra = {"request_id": request_id} if request_id else {}
+        logger.info("Starting API specification validation", extra=log_extra)
         
         try:
             # Parse the spec
@@ -46,12 +48,12 @@ class GovernanceValidator:
             # Validate against rules
             violations = await self._check_violations(spec, features, rules)
             
-            # Calculate compliance score
+            # Calculate compliance score (0.0 to 1.0)
             total_rules = len(rules)
             violations_count = len(violations)
             compliance_score = (
-                ((total_rules - violations_count) / total_rules * 100)
-                if total_rules > 0 else 100.0
+                max(0.0, ((total_rules - violations_count) / total_rules))
+                if total_rules > 0 else 1.0
             )
             
             result = {
@@ -62,7 +64,7 @@ class GovernanceValidator:
                 "features_analyzed": len(features)
             }
             
-            logger.info(f"Validation complete. Compliance: {compliance_score:.2f}%")
+            logger.info(f"Validation complete. Compliance: {compliance_score * 100:.2f}%")
             return result
         
         except Exception as e:
@@ -124,24 +126,26 @@ class GovernanceValidator:
         
         # Create query from features
         query_text = " ".join(features)
+        logger.info(f"Retrieving rules for query: {query_text[:100]}...")
         
         # Generate embedding
         query_embedding = await self.embedding_model.embed(query_text)
         
-        # Search vector DB
+        # Search vector DB - get top 10 most relevant rules
         results = await self.vector_store.search(
             query_embedding=query_embedding,
-            top_k=settings.TOP_K,
-            filter={"type": "governance_rule"}
+            top_k=settings.RETRIEVAL_TOP_K,
+            filter=None  # Get all governance rules
         )
         
-        # Filter by similarity threshold
+        # Filter by similarity threshold (0.3 is reasonable for semantic search)
+        similarity_threshold = 0.3
         rules = [
             result for result in results
-            if result["score"] >= settings.SIMILARITY_THRESHOLD
+            if result["score"] >= similarity_threshold
         ]
         
-        logger.info(f"Retrieved {len(rules)} relevant governance rules")
+        logger.info(f"Retrieved {len(rules)} relevant governance rules (threshold: {similarity_threshold})")
         return rules
     
     async def _check_violations(
@@ -150,51 +154,117 @@ class GovernanceValidator:
         features: List[str],
         rules: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """Check for violations using LLM"""
+        """Check for violations using LLM with retrieved governance rules"""
+        
+        if not rules:
+            logger.warning("No governance rules retrieved for validation")
+            return []
         
         violations = []
         
-        # Group rules by relevance score
-        high_priority_rules = [r for r in rules if r["score"] >= 0.9]
+        # Prepare the full API spec as JSON for context
+        spec_json = json.dumps(spec, indent=2)
         
-        # Check high priority rules with LLM
-        for rule in high_priority_rules:
+        # Build comprehensive governance context from all retrieved rules
+        governance_context = []
+        for i, rule in enumerate(rules, 1):
             rule_text = rule["metadata"].get("text", "")
-            
-            prompt = f"""You are an API governance validator. Check if the following API specification violates this governance rule.
+            score = rule["score"]
+            chunk_index = rule["metadata"].get("chunk_index", "?")
+            governance_context.append(
+                f"[Rule {i} - Relevance: {score:.2f} - Chunk: {chunk_index}]\n{rule_text}"
+            )
+        
+        all_rules_text = "\n\n".join(governance_context)
+        
+        # Create comprehensive validation prompt
+        prompt = f"""You are an expert API governance validator. Your task is to validate an API specification against enterprise governance standards.
 
-Governance Rule:
-{rule_text}
+GOVERNANCE RULES (Retrieved from vector database):
+{all_rules_text}
 
-API Features:
-{chr(10).join(features)}
+API SPECIFICATION TO VALIDATE:
+{spec_json}
 
-Analyze if there is a violation. Respond in JSON format:
+API FEATURES EXTRACTED:
+{chr(10).join('- ' + f for f in features)}
+
+VALIDATION TASK:
+1. Analyze the API specification against ALL the governance rules provided above
+2. Check for violations in these key areas:
+   - URI/Resource naming conventions (nouns, plural, lowercase, hyphens)
+   - HTTP methods and status codes usage
+   - Request/response schema standards
+   - Error handling and error model format
+   - Security (authentication, authorization)
+   - API versioning approach
+   - Documentation completeness (OpenAPI standards)
+   - Pagination, filtering, sorting
+   
+3. For each violation found, provide:
+   - Which specific rule was violated
+   - Why it's a violation
+   - Severity (critical/high/medium/low)
+   - Specific recommendation to fix it
+
+Respond in JSON format with an array of violations:
 {{
-    "violated": true/false,
-    "reason": "explanation if violated",
-    "severity": "high/medium/low",
-    "recommendation": "how to fix"
+    "violations": [
+        {{
+            "rule_violated": "Brief description of the rule",
+            "violation_details": "What exactly is wrong in the API spec",
+            "severity": "critical|high|medium|low",
+            "recommendation": "Specific steps to fix this violation",
+            "examples": "Code example showing the fix (if applicable)"
+        }}
+    ],
+    "summary": {{
+        "total_violations": 0,
+        "critical_count": 0,
+        "high_count": 0,
+        "medium_count": 0,
+        "low_count": 0
+    }}
 }}
+
+If NO violations are found, return an empty violations array with counts set to 0.
 """
+        
+        try:
+            logger.info(f"Validating API spec against {len(rules)} governance rules using LLM...")
             
-            try:
-                response = await self.llm_client.generate_json(
-                    prompt=prompt,
-                    system_message="You are an API governance expert."
-                )
-                
-                if response.get("violated"):
-                    violations.append({
-                        "rule": rule_text[:200] + "..." if len(rule_text) > 200 else rule_text,
-                        "reason": response.get("reason"),
-                        "severity": response.get("severity", "medium"),
-                        "recommendation": response.get("recommendation"),
-                        "rule_id": rule["id"]
-                    })
+            response = await self.llm_client.generate_json(
+                prompt=prompt,
+                system_message="You are an expert API governance validator with deep knowledge of REST API best practices, OpenAPI standards, and enterprise API design patterns."
+            )
             
-            except Exception as e:
-                logger.error(f"Error checking rule: {e}")
+            # Extract violations from LLM response
+            violation_list = response.get("violations", [])
+            summary = response.get("summary", {})
+            
+            logger.info(f"Validation complete. Found {summary.get('total_violations', len(violation_list))} violations")
+            
+            # Format violations for response
+            for i, v in enumerate(violation_list, 1):
+                violations.append({
+                    "violation_number": i,
+                    "rule": v.get("rule_violated", "Unknown rule"),
+                    "details": v.get("violation_details", ""),
+                    "severity": v.get("severity", "medium"),
+                    "recommendation": v.get("recommendation", ""),
+                    "examples": v.get("examples", "")
+                })
+            
+        except Exception as e:
+            logger.error(f"Error during LLM validation: {e}", exc_info=True)
+            # Return a generic error violation
+            violations.append({
+                "violation_number": 1,
+                "rule": "Validation Error",
+                "details": f"Error occurred during validation: {str(e)}",
+                "severity": "high",
+                "recommendation": "Please check the API specification format and try again"
+            })
         
         return violations
 

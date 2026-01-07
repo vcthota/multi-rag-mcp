@@ -1,0 +1,113 @@
+version: '3.8'
+
+services:
+  # API Governance Backend Service
+  api-governance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: api-governance-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Application Settings
+      - ENVIRONMENT=production
+      - LOG_LEVEL=INFO
+      
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # ChromaDB Configuration
+      - CHROMA_PERSIST_DIRECTORY=/app/data/chroma
+      - VECTOR_DB_TYPE=chromadb
+      
+      # API Settings
+      - API_V1_PREFIX=/api/v1
+      - CORS_ORIGINS=["http://localhost:8501","http://localhost:3000"]
+      
+      # Rate Limiting (Optional)
+      - ENABLE_RATE_LIMITING=false
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./data/chroma:/app/data/chroma
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - api-governance-network
+    restart: unless-stopped
+
+  # Streamlit Client UI
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    container_name: api-governance-client
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api-governance:8000
+    depends_on:
+      api-governance:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - api-governance-network
+    restart: unless-stopped
+
+  # Redis (for caching and rate limiting)
+  redis:
+    image: redis:7-alpine
+    container_name: api-governance-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - api-governance-network
+    restart: unless-stopped
+
+  # Nginx (Optional - for production reverse proxy)
+  nginx:
+    image: nginx:alpine
+    container_name: api-governance-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api-governance
+      - client
+    networks:
+      - api-governance-network
+    restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  api-governance-network:
+    driver: bridge

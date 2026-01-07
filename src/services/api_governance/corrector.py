@@ -82,6 +82,10 @@ Respond in JSON format:
             corrected_spec = response.get("corrected_spec", spec_content)
             changes = response.get("changes_made", [])
             
+            # Convert corrected_spec to string if it's a dict
+            if isinstance(corrected_spec, dict):
+                corrected_spec = json.dumps(corrected_spec, indent=2)
+            
             # Validate the corrected spec is valid JSON/YAML
             if spec_format.lower() == "json":
                 json.loads(corrected_spec)

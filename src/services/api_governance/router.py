@@ -253,8 +253,7 @@ async def validate_api_spec(request: Request, validate_req: ValidateRequest):
         validator_service = get_validator_service()
         result = await validator_service.validate_spec(
             spec_content=validate_req.spec_content,
-            spec_format=validate_req.spec_format,
-            request_id=request_id
+            spec_format=validate_req.spec_format
         )
         
         logger.info(
@@ -314,8 +313,7 @@ async def correct_violations(request: Request, correct_req: CorrectRequest):
         result = await corrector_service.correct_violations(
             spec_content=correct_req.spec_content,
             violations=correct_req.violations,
-            spec_format=correct_req.spec_format,
-            request_id=request_id
+            spec_format=correct_req.spec_format
         )
         
         logger.info(

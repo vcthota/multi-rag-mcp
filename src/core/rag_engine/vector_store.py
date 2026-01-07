@@ -38,19 +38,24 @@ class VectorStore:
     def _init_chromadb(self):
         """Initialize ChromaDB client"""
         import chromadb
+        from pathlib import Path
         
-        self.client = chromadb.HttpClient(
-            host=settings.CHROMA_HOST,
-            port=settings.CHROMA_PORT
+        # Create persist directory if it doesn't exist
+        persist_dir = Path(settings.CHROMA_PERSIST_DIRECTORY)
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Use PersistentClient for local storage
+        self.client = chromadb.PersistentClient(
+            path=str(persist_dir)
         )
         
         self.collection = self.client.get_or_create_collection(
             name=self.index_name,
-            metadata={"dimension": settings.EMBEDDING_DIMENSION}
+            metadata={"hnsw:space": "cosine"}
         )
         
         self.backend = "chromadb"
-        logger.info(f"Initialized ChromaDB collection: {self.index_name}")
+        logger.info(f"Initialized ChromaDB collection: {self.index_name} at {persist_dir}")
     
     async def upsert(
         self,

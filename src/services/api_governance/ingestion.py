@@ -8,7 +8,7 @@ from pathlib import Path
 import uuid
 
 from PyPDF2 import PdfReader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from src.core.rag_engine.embeddings import get_embedding_model
 from src.core.rag_engine.vector_store import get_vector_store
@@ -23,11 +23,15 @@ class GovernanceIngestion:
     
     def __init__(self):
         self.embedding_model = get_embedding_model()
-        self.vector_store = get_vector_store(settings.PINECONE_INDEX_GOVERNANCE)
+        self.vector_store = get_vector_store(settings.PINECONE_INDEX_API_GOVERNANCE)
+        
+        # Text splitter configuration
+        chunk_size = 1000  # Characters per chunk
+        chunk_overlap = 200  # Overlap between chunks
         
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=settings.CHUNK_SIZE,
-            chunk_overlap=settings.CHUNK_OVERLAP,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
             separators=["\n\n", "\n", ". ", " ", ""]
         )
     
